@@ -6,15 +6,16 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 def get_api_key() -> str:
-    """Returns the active LLM API key (user key or Emergent universal key)."""
-    return (os.environ.get('ANTHROPIC_API_KEY') or
+    """Returns the active LLM API key (Gemini key or legacy Anthropic key)."""
+    return (os.environ.get('GEMINI_API_KEY') or
+            os.environ.get('ANTHROPIC_API_KEY') or
             os.environ.get('EMERGENT_LLM_KEY', ''))
 
-# Models
-SUMMARIZATION_MODEL = "claude-haiku-4-5-20251001"
-QA_MODEL = "claude-sonnet-4-6"
+# Models — Google Gemini (2.5 Flash)
+SUMMARIZATION_MODEL = "gemini-2.5-flash"
+QA_MODEL = "gemini-2.5-flash"
 
-# Embeddings
+# Embeddings (local, no API key needed)
 EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 EMBEDDING_DIM = 384
 

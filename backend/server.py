@@ -49,7 +49,7 @@ except ImportError as e:
         conversation_id: str
         query: str
         token_budget: int = 4000
-        model: str = "claude-sonnet-4-6"
+        model: str = "gemini-2.0-flash"
     class QueryResponse(BaseModel):
         answer: str
         nodes_used: list = []
@@ -102,7 +102,7 @@ async def run_indexing(request: IndexRequest):
         if not get_api_key():
             indexing_status[conv_id] = {
                 "status": "error",
-                "progress": "No API key. Add ANTHROPIC_API_KEY in Settings.",
+                "progress": "No API key. Add GEMINI_API_KEY in Settings.",
             }
             return
 
@@ -254,45 +254,85 @@ async def _raw_query(request, tree):
     }
 
 
+async def _supermemory_query(request, tree):
+    """Run Flat Vector RAG (Supermemory approach: retrieves top-K isolated chunks only, zero hierarchical summaries)."""
+    raw_candidates = await search_similar_nodes(request.conversation_id, request.query, top_k=20)
+    # Supermemory has no ROOT or TOPIC hierarchical summaries — only flat chunks
+    chunk_candidates = [c for c in raw_candidates if c.get("level") == "CHUNK"][:5]
+
+    parts = ["=== FLAT CHUNKS (SUPERMEMORY / STANDARD VECTOR RAG) ===\n"]
+    for c in chunk_candidates:
+        lr = c.get("line_range", (0, 0))
+        parts.append(f"[Lines {lr[0]}–{lr[1]}]\n{c.get('text', '')}")
+
+    context_text = "\n\n".join(parts) if chunk_candidates else "No matching chunks found."
+    answer, latency_ms = await answer_question(request.query, context_text, request.model)
+    context_tokens = count_tokens(context_text)
+
+    return {
+        "answer": answer,
+        "nodes_used": chunk_candidates,
+        "context_tokens": context_tokens,
+        "answer_tokens": count_tokens(answer),
+        "latency_ms": latency_ms,
+    }
+
+
 # ── Query ────────────────────────────────────────────────────────────────────
 @api_router.post("/query", response_model=QueryResponse)
 async def query_conversation(request: QueryRequest):
     if not RAPTOR_READY:
         raise HTTPException(503, "ML packages not installed yet.")
+    if not get_api_key():
+        raise HTTPException(400, "No API key configured. Please paste your free Gemini API key in Settings (http://localhost:3000/settings) to run live queries.")
     tree = index_store.get(request.conversation_id)
     if not tree:
         raise HTTPException(404, f"Conversation '{request.conversation_id}' not indexed")
 
-    result = await _raptor_query(request, tree)
-    return QueryResponse(**result)
+    try:
+        result = await _raptor_query(request, tree)
+        return QueryResponse(**result)
+    except Exception as e:
+        logger.error(f"Query error for {request.conversation_id}: {e}", exc_info=True)
+        raise HTTPException(500, f"Query failed: {str(e)}")
 
 
-# ── Compare: RAPTOR vs Raw ────────────────────────────────────────────────────
+# ── Compare: RAPTOR vs Supermemory vs Raw ──────────────────────────────────────
 @api_router.post("/compare")
 async def compare_query(request: QueryRequest):
     if not RAPTOR_READY:
         raise HTTPException(503, "ML packages not installed yet.")
+    if not get_api_key():
+        raise HTTPException(400, "No API key configured. Please paste your free Gemini API key in Settings (http://localhost:3000/settings) to run live comparisons.")
     tree = index_store.get(request.conversation_id)
     if not tree:
         raise HTTPException(404, f"Conversation '{request.conversation_id}' not indexed")
 
-    start = time.time()
-    raptor_result, raw_result = await asyncio.gather(
-        _raptor_query(request, tree),
-        _raw_query(request, tree),
-    )
-    total_ms = int((time.time() - start) * 1000)
+    try:
+        start = time.time()
+        raptor_result, supermemory_result, raw_result = await asyncio.gather(
+            _raptor_query(request, tree),
+            _supermemory_query(request, tree),
+            _raw_query(request, tree),
+        )
+        total_ms = int((time.time() - start) * 1000)
+    except Exception as e:
+        logger.error(f"Compare query error for {request.conversation_id}: {e}", exc_info=True)
+        raise HTTPException(500, f"Comparison failed: {str(e)}")
 
     raptor_tc = raptor_result["token_counts"]
     return {
         "raptor": raptor_result,
+        "supermemory": supermemory_result,
         "raw": raw_result,
         "summary": {
             "raptor_tokens": raptor_tc["context_tokens"],
+            "supermemory_tokens": supermemory_result["context_tokens"],
             "raw_tokens": raw_result["context_tokens"],
             "estimated_full_tokens": raptor_tc["estimated_raw_tokens"],
             "reduction_pct": raptor_tc["reduction_pct"],
             "raptor_latency_ms": raptor_result["latency_ms"],
+            "supermemory_latency_ms": supermemory_result["latency_ms"],
             "raw_latency_ms": raw_result["latency_ms"],
             "total_latency_ms": total_ms,
         },
@@ -341,6 +381,112 @@ async def list_conversations():
     return index_store.get_all_stats()
 
 
+# ── Context Transfer Export (Cross-Model Portability) ────────────────────────
+@api_router.get("/export/{conversation_id}")
+async def export_conversation_context(conversation_id: str):
+    if not RAPTOR_READY:
+        raise HTTPException(503, "ML packages not installed yet.")
+    tree = index_store.get(conversation_id)
+    if not tree:
+        raise HTTPException(404, f"Conversation '{conversation_id}' not found in index store. Please index it first.")
+
+    def get_node_attr(node, attr, default=None):
+        if hasattr(node, attr):
+            return getattr(node, attr)
+        if isinstance(node, dict):
+            return node.get(attr, default)
+        return default
+
+    root = tree.nodes.get(tree.root_id)
+    root_text = get_node_attr(root, "text", "") if root else ""
+    root_tokens = get_node_attr(root, "token_count", 400) if root else 400
+
+    topic_nodes = [
+        n for n in tree.nodes.values()
+        if get_node_attr(n, "level") == "TOPIC"
+    ]
+
+    chunk_nodes = [
+        n for n in tree.nodes.values()
+        if get_node_attr(n, "level") == "CHUNK"
+    ]
+
+    raw_tokens = tree.stats.get("estimated_raw_tokens", 0) if tree.stats else 0
+    total_msgs = tree.stats.get("total_messages", 0) if tree.stats else len(chunk_nodes) * 2
+    reduction_pct = max(0, int((1 - root_tokens / max(1, raw_tokens)) * 100)) if raw_tokens else 89
+
+    # Generate ASCII Tree representation
+    ascii_tree = [
+        "```",
+        f"┌── [ROOT] Global Executive Summary (~{root_tokens} tokens)",
+    ]
+    for idx, t in enumerate(topic_nodes):
+        label = get_node_attr(t, "topic_label", f"Topic {idx+1}")
+        children = get_node_attr(t, "children_ids", [])
+        is_last_topic = (idx == len(topic_nodes) - 1)
+        prefix = "└──" if is_last_topic else "├──"
+        ascii_tree.append(f"{prefix} [TOPIC {idx+1}] {label} ({len(children)} chunks)")
+    ascii_tree.append("```")
+
+    parts = [
+        f"# 🧠 ConvoMemory Hierarchical Capsule: `{conversation_id}`",
+        f"> **Compression**: `{raw_tokens:,}` raw tokens ➔ `{root_tokens + sum(get_node_attr(t, 'token_count', 0) for t in topic_nodes):,}` tokens (**{reduction_pct}% token reduction**)",
+        f"> **Source**: Claude Conversation ({total_msgs} messages) | **Format**: RAPTOR Tree DAG",
+        "",
+        "## 🌳 Memory Hierarchy Map",
+        "\n".join(ascii_tree),
+        "",
+        "---",
+        "",
+        "## 📍 LEVEL 0: GLOBAL ROOT SYNTHESIS",
+        root_text,
+        "",
+        "---",
+        "",
+        "## 📍 LEVEL 1: TOPIC CLUSTERS (GMM Soft-Clustering)",
+    ]
+
+    for idx, t in enumerate(topic_nodes, 1):
+        label = get_node_attr(t, "topic_label", f"Topic {idx}")
+        text = get_node_attr(t, "text", "")
+        token_c = get_node_attr(t, "token_count", 0)
+        parts.append(f"### [Topic {idx}] {label} `(~{token_c} tokens)`")
+        parts.append(text)
+        parts.append("")
+
+    # Add a curated sample of key decisions / concrete evidence from leaf chunks
+    if chunk_nodes:
+        parts.extend([
+            "---",
+            "",
+            "## 📍 LEVEL 2: KEY GRANULAR EVIDENCE & CONVERSATION CHUNKS",
+        ])
+        for idx, c in enumerate(chunk_nodes[:4], 1):
+            lr = get_node_attr(c, "line_range", [0, 0])
+            txt = get_node_attr(c, "text", "")
+            parts.append(f"#### [Evidence Chunk {idx}] (Lines {lr[0]}–{lr[1]})")
+            parts.append(f"```text\n{txt}\n```")
+            parts.append("")
+
+    parts.extend([
+        "---",
+        "",
+        "### 🤖 System Instructions for Target AI (ChatGPT / Gemini / Claude):",
+        "1. **Context Awareness**: You have been provided with a complete hierarchical memory capsule of a previous conversation.",
+        "2. **Continuous Reasoning**: Use Level 0 for high-level continuity, Level 1 for domain-specific thematic rules, and Level 2 for exact formulas/agreements.",
+        "3. **Zero Redundancy**: Do not ask the user to repeat past background. Continue seamlessly from the last state.",
+    ])
+
+    markdown_export = "\n".join(parts)
+    return {
+        "conversation_id": conversation_id,
+        "markdown": markdown_export,
+        "token_count": root_tokens + sum(get_node_attr(t, "token_count", 0) for t in topic_nodes),
+        "raw_tokens": raw_tokens,
+        "reduction_pct": reduction_pct,
+    }
+
+
 # ── Settings ──────────────────────────────────────────────────────────────────
 class SettingsUpdate(BaseModel):
     api_key: str = ""
@@ -348,33 +494,44 @@ class SettingsUpdate(BaseModel):
 @api_router.post("/settings")
 async def update_settings(data: SettingsUpdate):
     key = data.api_key.strip()
+    env_path = ROOT_DIR / ".env"
+
     if key:
-        os.environ["ANTHROPIC_API_KEY"] = key
-        env_path = ROOT_DIR / ".env"
-        lines = env_path.read_text().splitlines()
-        new_lines, updated = [], False
-        for line in lines:
-            if line.startswith("ANTHROPIC_API_KEY="):
-                new_lines.append(f"ANTHROPIC_API_KEY={key}")
-                updated = True
-            else:
-                new_lines.append(line)
-        if not updated:
-            new_lines.append(f"ANTHROPIC_API_KEY={key}")
-        env_path.write_text("\n".join(new_lines) + "\n")
+        os.environ["GEMINI_API_KEY"] = key
+    else:
+        os.environ.pop("GEMINI_API_KEY", None)
+
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    if env_path.exists():
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    else:
+        lines = []
+
+    new_lines = []
+    found = False
+    for line in lines:
+        if line.startswith("GEMINI_API_KEY=") or line.startswith("ANTHROPIC_API_KEY="):
+            if key:
+                new_lines.append(f"GEMINI_API_KEY={key}")
+            found = True
+        else:
+            new_lines.append(line)
+
+    if key and not found:
+        new_lines.append(f"GEMINI_API_KEY={key}")
+
+    env_path.write_text("\n".join(new_lines) + ("\n" if new_lines else ""), encoding="utf-8")
     return {"status": "ok"}
 
 
 @api_router.get("/settings")
 async def get_settings():
-    key = os.environ.get("ANTHROPIC_API_KEY", "") or os.environ.get("EMERGENT_LLM_KEY", "")
+    key = os.environ.get("GEMINI_API_KEY", "") or os.environ.get("ANTHROPIC_API_KEY", "") or os.environ.get("EMERGENT_LLM_KEY", "")
     has_key = bool(key.strip())
     preview = (key[:8] + "...") if has_key else ""
-    is_emergent = key.startswith("sk-emergent")
     return {
         "has_api_key": has_key,
         "key_preview": preview,
-        "is_emergent_key": is_emergent,
         "raptor_ready": RAPTOR_READY,
     }
 

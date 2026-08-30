@@ -28,17 +28,30 @@
     <!-- STATE: not_indexed -->
     <section id="stateNotIndexed" class="state hidden">
       <p class="state-label">NOT INDEXED</p>
-      <p class="state-sub" id="msgCountLine">Detected <b id="msgCount">--</b> messages</p>
-      <label class="field-label">CONVERSATION ID</label>
-      <input type="text" id="convIdInput" class="input" placeholder="my-convo-1" data-testid="conv-id-input" />
-      <button class="btn btn-primary" id="indexBtn" data-testid="index-btn">Index Conversation</button>
+      <p class="state-sub" id="msgCountLine">Detected <b id="msgCount">--</b> messages on page</p>
+      <label class="field-label">CONVERSATION ID / NAME</label>
+      <input type="text" id="convIdInput" class="input" placeholder="e.g. pet-spa-scaling-strategy" data-testid="conv-id-input" />
+      <button class="btn btn-primary" id="indexBtn" data-testid="index-btn">⚡ Index This Conversation</button>
+
+      <div class="existing-convs-wrap" id="existingConvsWrap" style="margin-top: 10px; border-top: 1px solid #27272A; padding-top: 8px;">
+        <label class="field-label">OR SWITCH TO INDEXED CONVERSATION</label>
+        <select id="existingConvSelect" class="select" style="font-size: 10px; font-family: monospace;">
+          <option value="">Select an indexed conversation...</option>
+        </select>
+      </div>
+
+      <div style="margin-top: 8px; text-align: center;">
+        <a href="http://localhost:3000" target="_blank" class="ext-link" id="openWebDashboardLink">
+          Open Visual Web Dashboard & Compare →
+        </a>
+      </div>
     </section>
 
     <!-- STATE: indexing -->
     <section id="stateIndexing" class="state hidden">
       <div class="spinner"></div>
-      <p class="state-label">INDEXING</p>
-      <p class="state-sub" id="indexProgress">Building RAPTOR tree (~60s)</p>
+      <p class="state-label">INDEXING WITH RAPTOR</p>
+      <p class="state-sub" id="indexProgress">Building RAPTOR tree...</p>
     </section>
 
     <!-- STATE: indexed -->
@@ -49,13 +62,23 @@
         <span class="stat-pill" id="statTopics">-- topics</span>
         <span class="stat-pill" id="statChunks">-- chunks</span>
       </div>
+
+      <div style="display: flex; gap: 4px; margin: 4px 0;">
+        <button class="btn btn-secondary" id="openTreeInWebBtn" style="flex: 1; font-size: 9px; padding: 4px 6px;">
+          🌳 Visual Tree
+        </button>
+        <button class="btn btn-secondary" id="copyContextCapsuleBtn" style="flex: 1; font-size: 9px; padding: 4px 6px; color: #8B5CF6; border-color: #8B5CF6;">
+          📋 Export for ChatGPT
+        </button>
+      </div>
+
       <textarea id="queryInput" class="textarea" rows="3"
         placeholder="Ask a question about this conversation..." data-testid="query-input"></textarea>
       <button class="btn btn-primary" id="askBtn" data-testid="ask-btn">Ask</button>
 
       <div id="stateThinking" class="thinking hidden">
         <div class="spinner-sm"></div>
-        <span>Thinking...</span>
+        <span>Thinking with RAPTOR...</span>
       </div>
 
       <div id="answerPanel" class="answer-panel hidden" data-testid="answer-panel">
@@ -81,6 +104,14 @@
       <button class="btn btn-primary" id="pasteIndexBtn" data-testid="paste-index-btn">Index Pasted Text</button>
     </section>
 
+    <!-- STATE: needs_key -->
+    <section id="stateNeedsKey" class="state hidden">
+      <p class="warn-label">API KEY REQUIRED</p>
+      <p class="state-sub">Add your Gemini API key in Settings to get started.</p>
+      <p class="state-sub" style="font-size:10px; color:#71717A;">Get a free key at <b>aistudio.google.com/apikey</b></p>
+      <button class="btn btn-primary" id="openSettingsBtn" data-testid="open-settings-btn">Open Settings</button>
+    </section>
+
     <!-- STATE: error -->
     <section id="stateError" class="state hidden">
       <p class="warn-label">ERROR</p>
@@ -93,19 +124,27 @@
   <!-- Settings panel -->
   <aside id="settingsPanel" class="settings-panel hidden">
     <p class="settings-title">SETTINGS</p>
+    <label class="field-label">GEMINI API KEY</label>
+    <div class="api-key-wrap">
+      <input type="password" id="apiKeyInput" class="input" placeholder="AIza..." data-testid="api-key-input" />
+      <button class="icon-btn api-key-toggle" id="toggleApiKeyVisibility" title="Show/hide key">&#128065;</button>
+    </div>
+    <p class="api-key-hint" id="apiKeyHint">Get a free key at <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com</a></p>
     <label class="field-label">BACKEND URL</label>
     <input type="text" id="backendUrlInput" class="input" placeholder="http://localhost:8001" data-testid="backend-url-input" />
     <label class="field-label">TOKEN BUDGET: <span id="budgetDisplay">4000</span></label>
     <input type="range" id="budgetRange" min="1000" max="8000" step="500" value="4000" data-testid="budget-range" />
     <label class="field-label">MODEL</label>
     <select id="modelSelect" class="select" data-testid="model-select">
-      <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
-      <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5 (Fast)</option>
+      <option value="gemini-2.5-flash">Gemini 2.5 Flash (Free / Recommended)</option>
+      <option value="gemini-2.5-pro">Gemini 2.5 Pro</option>
+      <option value="gemini-1.5-flash">Gemini 1.5 Flash</option>
     </select>
     <div class="settings-actions">
       <button class="btn btn-primary" id="saveSettingsBtn" data-testid="save-settings-btn">Save</button>
       <button class="btn btn-secondary" id="closeSettingsBtn" data-testid="close-settings-btn">Cancel</button>
     </div>
+    <p class="save-feedback hidden" id="saveFeedback">Settings saved!</p>
   </aside>
 </div>
 <script src="popup.js"></script>

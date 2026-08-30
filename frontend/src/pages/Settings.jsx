@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import axios from "axios";
-import { Save, CheckCircle, AlertCircle, Eye, EyeOff, Info } from "lucide-react";
+import { Save, CheckCircle, AlertCircle, Eye, EyeOff, Info, Key, Sparkles, ExternalLink } from "lucide-react";
 import { motion } from "framer-motion";
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
@@ -13,8 +13,12 @@ export default function Settings() {
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
 
-  useEffect(() => {
+  const fetchSettings = () => {
     axios.get(`${API}/settings`).then(r => setSettings(r.data)).catch(() => {});
+  };
+
+  useEffect(() => {
+    fetchSettings();
   }, []);
 
   const handleSave = async () => {
@@ -23,8 +27,7 @@ export default function Settings() {
     try {
       await axios.post(`${API}/settings`, { api_key: apiKey.trim() });
       setSaved(true);
-      const res = await axios.get(`${API}/settings`);
-      setSettings(res.data);
+      fetchSettings();
       setApiKey("");
       setTimeout(() => setSaved(false), 3000);
     } catch (e) {
@@ -36,30 +39,39 @@ export default function Settings() {
     <div className="p-8 min-h-full max-w-2xl" data-testid="settings-page">
       <div className="mb-8">
         <h1 className="text-4xl tracking-tighter font-mono-ibm font-bold text-[#F4F4F5]">SETTINGS</h1>
-        <p className="text-sm text-[#71717A] mt-1">Configure your ConvoMemory backend</p>
+        <p className="text-sm text-[#71717A] mt-1">Configure your ConvoMemory backend and LLM provider</p>
       </div>
 
       <div className="space-y-5">
         {/* API Key section */}
         <div className="bg-[#0F0F11] border border-[#27272A] p-6">
-          <p className="text-[9px] font-mono-ibm tracking-[0.2em] uppercase text-[#71717A] mb-4">
-            ANTHROPIC API KEY
-          </p>
+          <div className="flex items-center justify-between mb-4">
+            <p className="text-[9px] font-mono-ibm tracking-[0.2em] uppercase text-[#8B5CF6] font-bold flex items-center gap-1.5">
+              <Key size={12} /> GOOGLE GEMINI API KEY (FREE TIER)
+            </p>
+            <a 
+              href="https://aistudio.google.com/apikey" 
+              target="_blank" 
+              rel="noreferrer"
+              className="text-[10px] font-mono-ibm text-[#8B5CF6] hover:underline flex items-center gap-1"
+            >
+              Get Free Key <ExternalLink size={10} />
+            </a>
+          </div>
 
           {settings && (
             <div className="flex items-center gap-2 mb-4 text-[10px] font-mono-ibm" data-testid="api-key-status">
               {settings.has_api_key ? (
                 <>
                   <CheckCircle size={12} strokeWidth={1.5} className="text-[#10B981]" />
-                  <span className="text-[#10B981]">
-                    {settings.is_emergent_key ? "Using Emergent Universal Key" : "Custom key configured"}
-                  </span>
-                  <span className="text-[#3F3F46] ml-1">{settings.key_preview}</span>
+                  <span className="text-[#10B981] font-bold">API Key Active</span>
+                  <span className="text-[#71717A] ml-1">({settings.key_preview})</span>
                 </>
               ) : (
                 <>
-                  <AlertCircle size={12} strokeWidth={1.5} className="text-[#F59E0B]" />
-                  <span className="text-[#F59E0B]">No key configured</span>
+                  <AlertCircle size={12} strokeWidth={1.5} className="text-[#EF4444]" />
+                  <span className="text-[#EF4444] font-bold">No API Key Configured</span>
+                  <span className="text-[#71717A] ml-1">— Required for live AI comparisons and queries</span>
                 </>
               )}
             </div>
@@ -72,7 +84,7 @@ export default function Settings() {
               onChange={e => setApiKey(e.target.value)}
               data-testid="api-key-input"
               className="w-full px-3 py-2.5 bg-[#050505] border border-[#27272A] text-[#F4F4F5] text-xs font-mono-ibm outline-none focus:border-[#8B5CF6] transition-colors duration-200 pr-10"
-              placeholder="sk-ant-... or sk-emergent-..."
+              placeholder="Paste your Gemini API key (AIza...)"
               onKeyDown={e => e.key === "Enter" && handleSave()}
             />
             <button
@@ -92,52 +104,39 @@ export default function Settings() {
             onClick={handleSave}
             disabled={saving || !apiKey.trim()}
             data-testid="save-api-key-btn"
-            className="flex items-center gap-2 px-5 py-2.5 bg-[#8B5CF6] text-white text-xs font-mono-ibm tracking-[0.1em] hover:bg-[#7C3AED] disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-200"
+            className="flex items-center gap-2 px-5 py-2.5 bg-[#8B5CF6] text-white text-xs font-mono-ibm tracking-[0.1em] hover:bg-[#7C3AED] disabled:opacity-40 disabled:cursor-not-allowed transition-colors duration-200 font-bold"
           >
             {saved ? <CheckCircle size={13} strokeWidth={1.5} /> : <Save size={13} strokeWidth={1.5} />}
-            {saved ? "SAVED" : saving ? "SAVING..." : "SAVE KEY"}
+            {saved ? "SAVED!" : saving ? "SAVING..." : "SAVE GEMINI KEY"}
           </button>
         </div>
 
         {/* System info */}
         <div className="bg-[#0F0F11] border border-[#27272A] p-6">
-          <p className="text-[9px] font-mono-ibm tracking-[0.2em] uppercase text-[#71717A] mb-4">SYSTEM INFO</p>
+          <p className="text-[9px] font-mono-ibm tracking-[0.2em] uppercase text-[#71717A] mb-4">SYSTEM STATUS & MODELS</p>
           <div className="grid grid-cols-2 gap-4 text-[10px] font-mono-ibm">
             {[
-              ["RAPTOR READY", settings?.raptor_ready ? "YES" : "INSTALLING...", settings?.raptor_ready ? "#10B981" : "#F59E0B"],
-              ["SUMMARIZATION MODEL", "claude-haiku-4-5", "#A1A1AA"],
-              ["Q&A MODEL", "claude-sonnet-4-6", "#A1A1AA"],
-              ["EMBEDDING MODEL", "all-MiniLM-L6-v2", "#A1A1AA"],
-              ["TOKEN BUDGET (DEFAULT)", "4,000", "#A1A1AA"],
-              ["VECTOR DB", "ChromaDB (local)", "#A1A1AA"],
+              ["RAPTOR ENGINE", settings?.raptor_ready ? "READY (ML Active)" : "LOADING...", settings?.raptor_ready ? "#10B981" : "#F59E0B"],
+              ["DEFAULT LLM", "gemini-2.0-flash (Free Tier)", "#8B5CF6"],
+              ["SUMMARIZATION MODEL", "gemini-2.0-flash", "#A1A1AA"],
+              ["EMBEDDING MODEL", "sentence-transformers/all-MiniLM-L6-v2 (Local 384-d)", "#10B981"],
+              ["CLUSTERING ALGO", "Gaussian Mixture Models (GMM) + BIC", "#4F46E5"],
+              ["VECTOR DB", "ChromaDB (Persistent Local)", "#10B981"],
             ].map(([k, v, c]) => (
               <div key={k}>
                 <p className="text-[#71717A] tracking-[0.1em] mb-0.5">{k}</p>
-                <p style={{ color: c || "#F4F4F5" }}>{v}</p>
+                <p style={{ color: c || "#F4F4F5" }} className="font-semibold">{v}</p>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Info panel */}
+        {/* Free tier notice */}
         <div className="flex gap-3 px-4 py-3 bg-[#8B5CF6]/5 border border-[#8B5CF6]/20 text-[10px] font-mono-ibm text-[#A1A1AA]">
-          <Info size={13} strokeWidth={1.5} className="text-[#8B5CF6] flex-shrink-0 mt-0.5" />
+          <Sparkles size={14} strokeWidth={1.5} className="text-[#8B5CF6] flex-shrink-0 mt-0.5" />
           <div className="space-y-1">
-            <p>The system uses an Emergent Universal Key by default (credits deducted from your balance).</p>
-            <p>You can replace it with your own Anthropic key at any time — enter it above and click Save.</p>
-          </div>
-        </div>
-
-        {/* Extension info */}
-        <div className="bg-[#0F0F11] border border-[#27272A] p-6">
-          <p className="text-[9px] font-mono-ibm tracking-[0.2em] uppercase text-[#71717A] mb-4">
-            CHROME EXTENSION
-          </p>
-          <div className="space-y-2 text-[10px] font-mono-ibm text-[#A1A1AA]">
-            <p>1. Open Chrome → Extensions → Enable Developer Mode</p>
-            <p>2. Click "Load unpacked" → select the <span className="text-[#F4F4F5]">/app/extension/</span> directory</p>
-            <p>3. Navigate to <span className="text-[#F4F4F5]">claude.ai</span> and open the extension popup</p>
-            <p>4. Set backend URL to: <span className="text-[#8B5CF6] break-all">{process.env.REACT_APP_BACKEND_URL}</span></p>
+            <p className="text-[#F4F4F5] font-bold">100% Free Gemini API Support:</p>
+            <p>ConvoMemory uses Google's official <span className="text-[#8B5CF6]">gemini-2.0-flash</span> model with generous free quotas (15 requests per minute, 1,500 requests per day) with zero credit card required.</p>
           </div>
         </div>
       </div>

@@ -57,7 +57,7 @@ class QueryRequest(BaseModel):
     conversation_id: str
     query: str
     token_budget: int = 4000
-    model: str = "claude-sonnet-4-6"
+    model: str = "gemini-2.5-flash"
 
 
 class QueryResponse(BaseModel):

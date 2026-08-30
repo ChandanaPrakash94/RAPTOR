@@ -187,22 +187,48 @@ export default function TreeView() {
         </div>
       </div>
 
-      {/* Conversation selector */}
-      <div className="mb-6 flex items-center gap-4">
-        <label className="text-[9px] font-mono-ibm tracking-[0.2em] uppercase text-[#71717A] whitespace-nowrap">
-          CONVERSATION
-        </label>
-        <select
-          value={selectedConv}
-          onChange={e => { setSelectedConv(e.target.value); navigate(`/tree/${e.target.value}`); }}
-          data-testid="conv-selector"
-          className="flex-1 max-w-sm px-3 py-2 bg-[#0F0F11] border border-[#27272A] text-[#F4F4F5] text-xs font-mono-ibm outline-none focus:border-[#8B5CF6] transition-colors duration-200 cursor-pointer"
-        >
-          <option value="">Select a conversation...</option>
-          {conversations.map(c => (
-            <option key={c.conversation_id} value={c.conversation_id}>{c.conversation_id}</option>
-          ))}
-        </select>
+      {/* Conversation selector & Transfer Export */}
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-4 flex-1">
+          <label className="text-[9px] font-mono-ibm tracking-[0.2em] uppercase text-[#71717A] whitespace-nowrap">
+            CONVERSATION
+          </label>
+          <select
+            value={selectedConv}
+            onChange={e => { setSelectedConv(e.target.value); navigate(`/tree/${e.target.value}`); }}
+            data-testid="conv-selector"
+            className="flex-1 max-w-sm px-3 py-2 bg-[#0F0F11] border border-[#27272A] text-[#F4F4F5] text-xs font-mono-ibm outline-none focus:border-[#8B5CF6] transition-colors duration-200 cursor-pointer"
+          >
+            <option value="">Select a conversation...</option>
+            {conversations.map(c => (
+              <option key={c.conversation_id} value={c.conversation_id}>{c.conversation_id}</option>
+            ))}
+          </select>
+        </div>
+
+        {selectedConv && (
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => navigate(`/compare/${selectedConv}`)}
+              className="px-3 py-1.5 bg-[#27272A] hover:bg-[#3F3F46] text-[#F4F4F5] text-xs font-mono-ibm transition-colors"
+            >
+              Benchmark vs Raw
+            </button>
+            <button
+              onClick={() => {
+                axios.get(`${API}/export/${selectedConv}`).then(r => {
+                  if (r.data?.markdown) {
+                    navigator.clipboard.writeText(r.data.markdown);
+                    alert("Context transfer capsule copied! Paste into ChatGPT, Gemini, or Claude.");
+                  }
+                });
+              }}
+              className="px-3 py-1.5 bg-[#8B5CF6] hover:bg-[#7C3AED] text-white text-xs font-mono-ibm font-bold transition-colors"
+            >
+              📋 Copy Context for Other AIs
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Legend */}

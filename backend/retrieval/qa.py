@@ -1,8 +1,8 @@
-import uuid
+import asyncio
 import time
 import logging
+from google import genai
 from config import get_api_key, QA_MODEL
-from emergentintegrations.llm.chat import LlmChat, UserMessage, TextDelta, StreamDone
 
 logger = logging.getLogger(__name__)
 
@@ -27,23 +27,19 @@ async def answer_question(query: str, context_text: str, model: str = None) -> t
     model = model or QA_MODEL
     api_key = get_api_key()
     if not api_key:
-        raise RuntimeError("No API key configured. Add ANTHROPIC_API_KEY in Settings.")
+        raise RuntimeError("No API key configured. Add GEMINI_API_KEY in Settings.")
 
-    chat = LlmChat(
-        api_key=api_key,
-        session_id=str(uuid.uuid4()),
-        system_message=SYSTEM_PROMPT,
-    ).with_model("anthropic", model)
+    client = genai.Client(api_key=api_key)
 
     user_msg = QA_TEMPLATE.format(context_text=context_text, query=query)
+    full_prompt = f"{SYSTEM_PROMPT}\n\n{user_msg}"
 
     start = time.time()
-    parts = []
-    async for event in chat.stream_message(UserMessage(text=user_msg)):
-        if isinstance(event, TextDelta):
-            parts.append(event.content)
-        elif isinstance(event, StreamDone):
-            break
-
+    response = await asyncio.to_thread(
+        client.models.generate_content,
+        model=model,
+        contents=full_prompt,
+    )
     latency_ms = int((time.time() - start) * 1000)
-    return "".join(parts).strip(), latency_ms
+
+    return response.text.strip(), latency_ms

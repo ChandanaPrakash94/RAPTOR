@@ -1,13 +1,13 @@
 'use strict';
 
-let settings = { backendUrl: 'http://localhost:8001', tokenBudget: 4000, model: 'claude-sonnet-4-6' };
+let settings = { backendUrl: 'http://localhost:8001', tokenBudget: 4000, model: 'gemini-2.5-flash', apiKey: '' };
 let currentConvId = '';
 
 // ── DOM helpers ──────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 
 function showState(state) {
-  ['stateNotIndexed', 'stateIndexing', 'stateIndexed', 'stateDomFail', 'stateError'].forEach(s => {
+  ['stateNotIndexed', 'stateIndexing', 'stateIndexed', 'stateDomFail', 'stateError', 'stateNeedsKey'].forEach(s => {
     $(s).classList.add('hidden');
   });
   $('stateThinking')?.classList.add('hidden');
@@ -19,6 +19,7 @@ function showState(state) {
     indexed: 'stateIndexed',
     dom_fail: 'stateDomFail',
     error: 'stateError',
+    needs_key: 'stateNeedsKey',
   };
   const el = $(map[state]);
   if (el) el.classList.remove('hidden');
@@ -67,44 +68,79 @@ function parsePasted(text) {
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 async function init() {
-  const stored = await new Promise(r => chrome.storage.local.get(
-    ['backendUrl', 'tokenBudget', 'model', 'conversationId'], r
-  ));
-  settings.backendUrl = stored.backendUrl || 'http://localhost:8001';
-  settings.tokenBudget = stored.tokenBudget || 4000;
-  settings.model = stored.model || 'claude-sonnet-4-6';
-  currentConvId = stored.conversationId || genId();
+  try {
+    const stored = await new Promise(r => chrome.storage.local.get(
+      ['backendUrl', 'tokenBudget', 'model', 'conversationId', 'apiKey'], r
+    ));
+    settings.backendUrl = stored.backendUrl || 'http://localhost:8001';
+    settings.tokenBudget = stored.tokenBudget || 4000;
+    settings.model = stored.model || 'gemini-2.5-flash';
+    settings.apiKey = stored.apiKey || '';
+    currentConvId = stored.conversationId || genId();
 
-  // Populate settings panel
-  $('backendUrlInput').value = settings.backendUrl;
-  $('budgetRange').value = settings.tokenBudget;
-  $('budgetDisplay').textContent = settings.tokenBudget;
-  $('modelSelect').value = settings.model;
-  $('convIdInput').value = currentConvId;
+    // Populate settings panel
+    $('backendUrlInput').value = settings.backendUrl;
+    $('budgetRange').value = settings.tokenBudget;
+    $('budgetDisplay').textContent = settings.tokenBudget;
+    $('modelSelect').value = settings.model;
+    $('convIdInput').value = currentConvId;
+    $('apiKeyInput').value = settings.apiKey;
 
-  // Backend check
-  const check = await send({ type: 'CHECK_BACKEND' }).catch(() => ({ success: false }));
-  setBackend(check.success);
-  if (!check.success) {
+    // Backend check
+    const check = await send({ type: 'CHECK_BACKEND' }).catch(() => ({ success: false }));
+    setBackend(check.success);
+    if (!check.success) {
+      showState('error');
+      $('errorMsg').textContent = `Cannot connect to ${settings.backendUrl}. Is the backend running?`;
+      return;
+    }
+
+    // Check if API key is configured (on backend or locally)
+    const settingsRes = await send({ type: 'GET_BACKEND_SETTINGS' }).catch(() => null);
+    const hasKeyOnBackend = settingsRes?.has_api_key;
+    const hasKeyLocally = !!settings.apiKey.trim();
+
+    if (!hasKeyOnBackend && !hasKeyLocally) {
+      showState('needs_key');
+      return;
+    }
+
+    // If we have a key locally but backend doesn't know about it, sync it
+    if (hasKeyLocally && !hasKeyOnBackend) {
+      await send({ type: 'SAVE_API_KEY', apiKey: settings.apiKey }).catch(() => {});
+    }
+
+    // Load list of existing conversations from backend
+    const convListRes = await send({ type: 'LIST_CONVERSATIONS' }).catch(() => null);
+    const existingConvs = convListRes?.data || [];
+    const selectEl = $('existingConvSelect');
+    if (selectEl) {
+      selectEl.innerHTML = '<option value="">Switch to indexed conversation...</option>' + 
+        existingConvs.map(c => `<option value="${c.conversation_id}">${c.conversation_id} (${c.stats?.total_messages || 0} msgs)</option>`).join('');
+      if (existingConvs.some(c => c.conversation_id === currentConvId)) {
+        selectEl.value = currentConvId;
+      }
+    }
+
+    // Get message count from page
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.url?.includes('claude.ai')) {
+      chrome.tabs.sendMessage(tab.id, { type: 'GET_LINE_COUNT' }, res => {
+        if (res) $('msgCount').textContent = res.count || '--';
+      });
+    }
+
+    // Check if current conversation is indexed
+    const statusRes = await send({ type: 'GET_STATUS', conversationId: currentConvId }).catch(() => null);
+    if (statusRes?.success && statusRes.data?.status === 'indexed') {
+      showIndexedState(statusRes.data.stats || {});
+    } else {
+      showState('not_indexed');
+    }
+  } catch (err) {
+    console.error('Init error:', err);
     showState('error');
-    $('errorMsg').textContent = `Cannot connect to ${settings.backendUrl}. Check Settings.`;
-    return;
-  }
-
-  // Get message count from page
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (tab?.url?.includes('claude.ai')) {
-    chrome.tabs.sendMessage(tab.id, { type: 'GET_LINE_COUNT' }, res => {
-      if (res) $('msgCount').textContent = res.count || '--';
-    });
-  }
-
-  // Check if already indexed
-  const statusRes = await send({ type: 'GET_STATUS', conversationId: currentConvId }).catch(() => null);
-  if (statusRes?.success && statusRes.data?.status === 'indexed') {
-    showIndexedState(statusRes.data.stats || {});
-  } else {
-    showState('not_indexed');
+    $('errorMsg').textContent = err.message || 'Initialization failed';
   }
 }
 
@@ -114,6 +150,77 @@ function showIndexedState(stats) {
   $('statChunks').textContent = `${stats.total_chunks ?? '--'} chunks`;
   showState('indexed');
 }
+
+// ── Switch existing conversation dropdown ─────────────────────────────────────
+$('existingConvSelect')?.addEventListener('change', async (e) => {
+  const selectedId = e.target.value;
+  if (!selectedId) return;
+  currentConvId = selectedId;
+  $('convIdInput').value = currentConvId;
+  await chrome.storage.local.set({ conversationId: currentConvId });
+  const statusRes = await send({ type: 'GET_STATUS', conversationId: currentConvId }).catch(() => null);
+  if (statusRes?.success && statusRes.data?.status === 'indexed') {
+    showIndexedState(statusRes.data.stats || {});
+  }
+});
+
+// ── Open visual tree in Web App ───────────────────────────────────────────────
+$('openTreeInWebBtn')?.addEventListener('click', () => {
+  chrome.tabs.create({ url: `http://localhost:3000/tree/${encodeURIComponent(currentConvId)}` });
+});
+
+// ── Clipboard copy helper with fallback ─────────────────────────────────────
+function copyToClipboard(text) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    return navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+  }
+  return fallbackCopy(text);
+}
+
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand('copy');
+  } finally {
+    document.body.removeChild(ta);
+  }
+  return Promise.resolve();
+}
+
+// ── Copy Context Capsule for ChatGPT / Gemini ────────────────────────────────
+$('copyContextCapsuleBtn')?.addEventListener('click', async () => {
+  const btn = $('copyContextCapsuleBtn');
+  const oldText = btn.textContent;
+  btn.textContent = 'Exporting...';
+
+  const exportRes = await send({ type: 'EXPORT_CONTEXT', conversationId: currentConvId }).catch(e => ({ success: false, error: e.message }));
+  
+  if (exportRes?.success && exportRes.data?.markdown) {
+    await copyToClipboard(exportRes.data.markdown);
+    btn.textContent = '✓ Copied Capsule!';
+    btn.style.color = '#10B981';
+    btn.style.borderColor = '#10B981';
+
+    if (window.confirm('🧠 ConvoMemory Capsule copied to clipboard!\n\nWould you like to open ChatGPT in a new tab now to paste it?')) {
+      chrome.tabs.create({ url: 'https://chatgpt.com' });
+    }
+
+    setTimeout(() => {
+      btn.textContent = oldText;
+      btn.style.color = '#8B5CF6';
+      btn.style.borderColor = '#8B5CF6';
+    }, 3000);
+  } else {
+    btn.textContent = oldText;
+    const err = exportRes?.error || 'Conversation is not indexed yet. Please index it first.';
+    alert(`Could not export: ${err}`);
+  }
+});
 
 // ── Index button ─────────────────────────────────────────────────────────────
 $('indexBtn').addEventListener('click', async () => {
@@ -176,7 +283,7 @@ $('askBtn').addEventListener('click', async () => {
     displayAnswer(res.data);
   } else {
     $('answerPanel').classList.remove('hidden');
-    $('answerText').textContent = 'AI service unavailable. Try again.';
+    $('answerText').textContent = res?.error || 'AI service unavailable. Try again.';
   }
 });
 
@@ -216,13 +323,61 @@ $('sourcesToggle').addEventListener('click', () => {
 $('settingsToggle').addEventListener('click', () => $('settingsPanel').classList.toggle('hidden'));
 $('budgetRange').addEventListener('input', e => $('budgetDisplay').textContent = e.target.value);
 $('closeSettingsBtn').addEventListener('click', () => $('settingsPanel').classList.add('hidden'));
+
+// Toggle API key visibility
+$('toggleApiKeyVisibility').addEventListener('click', () => {
+  const input = $('apiKeyInput');
+  input.type = input.type === 'password' ? 'text' : 'password';
+});
+
+// Open settings from needs_key state
+$('openSettingsBtn').addEventListener('click', () => {
+  $('settingsPanel').classList.remove('hidden');
+});
+
 $('saveSettingsBtn').addEventListener('click', async () => {
+  const apiKey = $('apiKeyInput').value.trim();
   settings.backendUrl = $('backendUrlInput').value.trim() || 'http://localhost:8001';
   settings.tokenBudget = +$('budgetRange').value;
   settings.model = $('modelSelect').value;
+  settings.apiKey = apiKey;
+
+  // Save to chrome.storage
+  await chrome.storage.local.set({
+    backendUrl: settings.backendUrl,
+    tokenBudget: settings.tokenBudget,
+    model: settings.model,
+    apiKey: settings.apiKey,
+  });
+
+  // Forward settings to background
   await send({ type: 'UPDATE_SETTINGS', ...settings });
-  $('settingsPanel').classList.add('hidden');
+
+  // Save API key to backend
+  if (apiKey) {
+    const result = await send({ type: 'SAVE_API_KEY', apiKey }).catch(e => ({ success: false, error: e.message }));
+    if (!result?.success) {
+      $('saveFeedback').textContent = 'Error saving API key: ' + (result?.error || 'unknown');
+      $('saveFeedback').classList.remove('hidden');
+      $('saveFeedback').style.color = '#EF4444';
+      setTimeout(() => $('saveFeedback').classList.add('hidden'), 4000);
+      return;
+    }
+  }
+
+  // Show success feedback
+  $('saveFeedback').textContent = 'Settings saved!';
+  $('saveFeedback').style.color = '#10B981';
+  $('saveFeedback').classList.remove('hidden');
+  setTimeout(() => {
+    $('saveFeedback').classList.add('hidden');
+    $('settingsPanel').classList.add('hidden');
+  }, 1500);
+
   setBackend(true);
+
+  // Re-initialize to pick up new state
+  init();
 });
 
 $('retryBtn').addEventListener('click', () => init());

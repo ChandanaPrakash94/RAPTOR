@@ -64,6 +64,31 @@ async function handleMessage(msg, sender) {
       }
     }
 
+    case 'GET_BACKEND_SETTINGS': {
+      try {
+        const res = await fetch(`${backendUrl}/api/settings`, { signal: AbortSignal.timeout(4000) });
+        const data = await res.json();
+        return data;
+      } catch (e) {
+        return { has_api_key: false, error: e.message };
+      }
+    }
+
+    case 'SAVE_API_KEY': {
+      try {
+        const res = await fetch(`${backendUrl}/api/settings`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ api_key: msg.apiKey }),
+          signal: AbortSignal.timeout(5000),
+        });
+        const data = await res.json();
+        return { success: data.status === 'ok' };
+      } catch (e) {
+        return { success: false, error: e.message };
+      }
+    }
+
     case 'INDEX_CONVERSATION': {
       const { conversationId, messages } = msg;
       await setStorage({ indexStatus: 'indexing', conversationId });
@@ -101,7 +126,7 @@ async function handleMessage(msg, sender) {
             conversation_id: conversationId,
             query,
             token_budget: tokenBudget || 4000,
-            model: model || 'claude-sonnet-4-6',
+            model: model || 'gemini-2.0-flash',
           }),
         });
         const data = await res.json();
@@ -115,6 +140,29 @@ async function handleMessage(msg, sender) {
       try {
         const res = await fetchRetry(`${backendUrl}/api/status/${msg.conversationId}`);
         const data = await res.json();
+        return { success: true, data };
+      } catch (e) {
+        return { success: false, error: e.message };
+      }
+    }
+
+    case 'LIST_CONVERSATIONS': {
+      try {
+        const res = await fetchRetry(`${backendUrl}/api/conversations`);
+        const data = await res.json();
+        return { success: true, data };
+      } catch (e) {
+        return { success: false, error: e.message };
+      }
+    }
+
+    case 'EXPORT_CONTEXT': {
+      try {
+        const res = await fetchRetry(`${backendUrl}/api/export/${encodeURIComponent(msg.conversationId)}`);
+        const data = await res.json();
+        if (!res.ok) {
+          return { success: false, error: data.detail || 'Conversation not indexed yet' };
+        }
         return { success: true, data };
       } catch (e) {
         return { success: false, error: e.message };

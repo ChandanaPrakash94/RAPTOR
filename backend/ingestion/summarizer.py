@@ -1,8 +1,7 @@
-import uuid
 import asyncio
 import logging
+from google import genai
 from config import get_api_key, SUMMARIZATION_MODEL, LLM_MAX_CONCURRENT
-from emergentintegrations.llm.chat import LlmChat, UserMessage, TextDelta, StreamDone
 
 logger = logging.getLogger(__name__)
 _semaphore = None
@@ -18,21 +17,18 @@ def get_semaphore():
 async def _llm_complete(system_msg: str, user_msg: str, model: str) -> str:
     api_key = get_api_key()
     if not api_key:
-        raise RuntimeError("No API key configured. Add ANTHROPIC_API_KEY in Settings.")
+        raise RuntimeError("No API key configured. Add GEMINI_API_KEY in Settings.")
 
-    chat = LlmChat(
-        api_key=api_key,
-        session_id=str(uuid.uuid4()),
-        system_message=system_msg,
-    ).with_model("anthropic", model)
+    client = genai.Client(api_key=api_key)
 
-    parts = []
-    async for event in chat.stream_message(UserMessage(text=user_msg)):
-        if isinstance(event, TextDelta):
-            parts.append(event.content)
-        elif isinstance(event, StreamDone):
-            break
-    return "".join(parts).strip()
+    full_prompt = f"{system_msg}\n\n{user_msg}"
+
+    response = await asyncio.to_thread(
+        client.models.generate_content,
+        model=model,
+        contents=full_prompt,
+    )
+    return response.text.strip()
 
 
 async def summarize_cluster(cluster_text: str, max_tokens: int = 200) -> str:
